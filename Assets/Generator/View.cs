@@ -2,21 +2,22 @@
 
 namespace Assets.Generator
 {
-    class View : MonoBehaviour
+    public class View : MonoBehaviour
     {
+        public MeshFilter MeshFilter = null;
+
         private Mesh m_mesh;
-        private Transform m_resultsRoot = null;
 
         public void MeshUpdated(Mesh mesh)
         {
             // If the mesh has changed...
             if(m_mesh != mesh)
             {
-                // Rebuild the scene heirarchy
                 m_mesh = mesh;
-                if(m_resultsRoot != null)
+
+                if (MeshFilter != null)
                 {
-                    GameObject.Destroy(m_resultsRoot);
+                    MeshFilter.mesh = m_mesh;
                 }
             }
         }
