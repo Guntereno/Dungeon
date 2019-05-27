@@ -26,7 +26,7 @@ namespace Assets.Generator
             }
         }
 
-        private void Generate()
+        public void Generate()
         {
             Voronoi voronoi = new Voronoi(8, 22);
 
