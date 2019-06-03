@@ -3,77 +3,114 @@ using UnityEngine;
 
 namespace Assets.Generator
 {
+    [ExecuteInEditMode]
     public class Controller : MonoBehaviour
     {
+        public Camera Camera;
         public Material GroundMaterial;
+        public Vector2 Bounds = new Vector2(1.0f, 1.0f);
+        public int Seed = 0;
+        public int SiteCount = 10;
 
         // Voronoi Generation
 
-        private const int kRegionCount = 40;
         private Vector2[] m_sites;
         private GK.VoronoiDiagram m_voronoiDiagram;
 
         // Scene Heirarchy Generation
-
+        [HideInInspector]
         private Transform m_rootNode;
 
         // MonoBehaviour Methods
 
         void Start()
-        {
-            Generate();
-        }
+        {}
 
         void Update()
         {
-            RenderDebugVoronoi();
+            if(m_voronoiDiagram != null)
+            {
+                RenderDebugVoronoi(m_voronoiDiagram);
+            }
         }
 
         // Public Interface
 
         public void Generate()
         {
-            m_voronoiDiagram = GenerateVoronoi();
+            var random = new System.Random(Seed);
+            m_sites = GenerateControlPointsUniformRandom(random, Bounds, SiteCount);
+            m_voronoiDiagram = GenerateVoronoi(m_sites);
             GenerateScene(m_voronoiDiagram);
+
+            if(Camera != null)
+            {
+                // Position camera so it can see the whole width of the shape
+                // HACK
+                var center = new Vector3(Bounds.x * 0.5f, 0.0f, Bounds.y * 0.5f);
+                float fov = (Camera.fieldOfView * Camera.aspect);
+                var fovVRad = Camera.fieldOfView * Mathf.Deg2Rad;
+                var fovHRad = 2.0f * Mathf.Atan(Mathf.Tan(fovVRad / 2.0f) * Camera.aspect);
+
+                float widest = Mathf.Max(center.x, center.z);
+                float distance = Mathf.Tan(fovHRad * 0.5f) * widest;
+
+                var dir = new Vector3(1.0f, 0.0f, 1.0f);
+                dir.Normalize();
+                Vector3 pos = dir * distance;
+                pos.y = widest;
+                Camera.transform.position = pos;
+                Camera.transform.LookAt(center);
+            }
         }
 
         // Private Methods
 
-        private GK.VoronoiDiagram GenerateVoronoi()
+        private static Vector2[] GenerateControlPointsUniformRandom(System.Random random, Vector2 bounds, int siteCount)
         {
             // Generate the control points
-            var m_sites = new Vector2[kRegionCount];
-            for (int i = 0; i < kRegionCount; ++i)
+            var sites = new Vector2[siteCount];
+            for (int i = 0; i < siteCount; ++i)
             {
-                m_sites[i] = new Vector2(
-                    UnityEngine.Random.Range(0.0f, 1.0f),
-                    UnityEngine.Random.Range(0.0f, 1.0f)
+                sites[i] = new Vector2(
+                    (float)random.NextDouble() * bounds.x,
+                    (float)random.NextDouble() * bounds.y
                 );
             }
+            return sites;
+        }
 
+        private static Vector2[] GenerateControlPointsMitchell(System.Random random, Vector2 bounds, int siteCount)
+        {
+            throw new System.NotImplementedException();
+        }
+
+        private static GK.VoronoiDiagram GenerateVoronoi(Vector2[] sites)
+        {
             var calculator = new GK.VoronoiCalculator();
-            GK.VoronoiDiagram voronoiDiagram = calculator.CalculateDiagram(m_sites);
+            GK.VoronoiDiagram voronoiDiagram = calculator.CalculateDiagram(sites);
 
             return voronoiDiagram;
         }
 
-        private void RenderDebugVoronoi()
+        private static void RenderDebugVoronoi(GK.VoronoiDiagram diagram)
         {
-            if (m_voronoiDiagram != null)
+            if (diagram != null)
             {
-                if (m_voronoiDiagram.Edges != null)
+                if (diagram.Edges != null)
                 {
-                    int edgeCount = m_voronoiDiagram.Edges.Count;
+                    int edgeCount = diagram.Edges.Count;
                     for (int i = 0; i < edgeCount; ++i)
                     {
-                        GK.VoronoiDiagram.Edge edge = m_voronoiDiagram.Edges[i];
+                        GK.VoronoiDiagram.Edge edge = diagram.Edges[i];
                         Vector3 v0, v1;
                         switch (edge.Type)
                         {
+                            // a "segment" is a regular line segment
                             case GK.VoronoiDiagram.EdgeType.Segment:
                                 {
-                                    Vector2 uv0 = m_voronoiDiagram.Vertices[edge.Vert0];
-                                    Vector2 uv1 = m_voronoiDiagram.Vertices[edge.Vert1];
+                                    Vector2 uv0 = diagram.Vertices[edge.Vert0];
+                                    Vector2 uv1 = diagram.Vertices[edge.Vert1];
                                     v0 = new Vector3(uv0.x, 0.0f, uv0.y);
                                     v1 = new Vector3(uv1.x, 0.0f, uv1.y);
 
@@ -81,11 +118,12 @@ namespace Assets.Generator
                                     break;
                                 }
 
-
+                            // A "ray" is a voronoi edge starting at a given vertex and extending infinitely
+                            // in one direction
                             case GK.VoronoiDiagram.EdgeType.RayCW:
                             case GK.VoronoiDiagram.EdgeType.RayCCW:
                                 {
-                                    Vector2 posUv= m_voronoiDiagram.Vertices[edge.Vert0];
+                                    Vector2 posUv = diagram.Vertices[edge.Vert0];
 
                                     Vector3 pos = new Vector3(posUv.x, 0.0f, posUv.y);
                                     Vector3 dir = new Vector3(edge.Direction.x, 0.0f, edge.Direction.y);
@@ -94,9 +132,19 @@ namespace Assets.Generator
                                     break;
                                 }
 
+                            // A "line" is an infinite line in both directions (only valid for Voronoi diagrams
+                            // with 2 vertices or ones with all collinear points)
                             case GK.VoronoiDiagram.EdgeType.Line:
-                                // Not supported
-                                break;
+                                {
+                                    Vector2 posUv = diagram.Vertices[edge.Vert0];
+
+                                    Vector3 pos = new Vector3(posUv.x, 0.0f, posUv.y);
+                                    Vector3 dir = new Vector3(edge.Direction.x, 0.0f, edge.Direction.y);
+                                    Debug.DrawRay(pos, dir, Color.yellow);
+                                    Debug.DrawRay(pos, -dir, Color.yellow);
+                                    break;
+                                }
+
 
                             default:
                                 throw new System.Exception("Unupported EdgeType!");
@@ -164,15 +212,15 @@ namespace Assets.Generator
 
         private void GenerateScene(GK.VoronoiDiagram diagram)
         {
-            if(m_rootNode != null)
+            if (m_rootNode != null)
             {
-                GameObject.Destroy(m_rootNode.gameObject);
+                GameObject.DestroyImmediate(m_rootNode.gameObject);
             }
             m_rootNode = new GameObject("GeneratorRoot").transform;
 
             int siteCount = m_voronoiDiagram.Sites.Count;
 
-            for (int siteIndex=0; siteIndex<siteCount; ++siteIndex)
+            for (int siteIndex = 0; siteIndex < siteCount; ++siteIndex)
             {
                 GenerateSite(diagram, siteIndex);
             }
@@ -181,7 +229,7 @@ namespace Assets.Generator
         private void GenerateSite(GK.VoronoiDiagram diagram, int siteIndex)
         {
             Mesh mesh = GenerateSiteMesh(diagram, siteIndex);
-            if(mesh != null)
+            if (mesh != null)
             {
                 var siteRoot = new GameObject("Site" + siteIndex);
                 siteRoot.transform.SetParent(m_rootNode, false);
@@ -247,7 +295,7 @@ namespace Assets.Generator
                         triangles[1 + (segmentIndex * 3)] = nextIndex + 1;
 
                         // Debug Render
-                        Debug.DrawLine(loop[segmentIndex], loop[nextIndex], Color.cyan, 4.0f);
+                        //Debug.DrawLine(loop[segmentIndex], loop[nextIndex], Color.cyan, 4.0f);
                     }
                 }
 
