@@ -3,21 +3,36 @@ using UnityEngine;
 
 namespace Assets.Generator
 {
+    public enum DistributionAlgorithm
+    {
+        UniformRandom,
+        Mitchell
+    }
+
     [ExecuteInEditMode]
     public class Controller : MonoBehaviour
     {
+        [Header("Scene")]
+
         public Camera Camera;
         public Material GroundMaterial;
+
+        [Header("Distribution")]
+
         public Vector2 Bounds = new Vector2(1.0f, 1.0f);
         public int Seed = 0;
+        public DistributionAlgorithm DistributionAlgorithm;
         public int SiteCount = 10;
+        public int CandidateCount = 10;
 
         // Voronoi Generation
 
         private Vector2[] m_sites;
         private GK.VoronoiDiagram m_voronoiDiagram;
+        private Vector2 m_bounds;
 
         // Scene Heirarchy Generation
+
         [HideInInspector]
         private Transform m_rootNode;
 
@@ -30,6 +45,7 @@ namespace Assets.Generator
         {
             if(m_voronoiDiagram != null)
             {
+                RenderDebugBounds(m_bounds);
                 RenderDebugVoronoi(m_voronoiDiagram);
             }
         }
@@ -39,8 +55,24 @@ namespace Assets.Generator
         public void Generate()
         {
             var random = new System.Random(Seed);
-            m_sites = GenerateControlPointsUniformRandom(random, Bounds, SiteCount);
+
+            switch (DistributionAlgorithm)
+            {
+                case DistributionAlgorithm.UniformRandom:
+                    m_sites = GenerateControlPointsUniformRandom(random, Bounds, SiteCount);
+                    break;
+
+                case DistributionAlgorithm.Mitchell:
+                    m_sites = GenerateControlPointsMitchell(random, Bounds, SiteCount, CandidateCount);
+                    break;
+
+                default:
+                    throw new System.Exception("Unhandled DistributionAlgorithm!");
+            }
+
             m_voronoiDiagram = GenerateVoronoi(m_sites);
+            m_bounds = Bounds;
+
             GenerateScene(m_voronoiDiagram);
 
             if(Camera != null)
@@ -66,23 +98,57 @@ namespace Assets.Generator
 
         // Private Methods
 
+        private static Vector2 GetUniformRandomPoint(System.Random random, Vector2 bounds)
+        {
+            return new Vector2(
+                (float)random.NextDouble() * bounds.x,
+                (float)random.NextDouble() * bounds.y
+            );
+        }
+
         private static Vector2[] GenerateControlPointsUniformRandom(System.Random random, Vector2 bounds, int siteCount)
         {
             // Generate the control points
             var sites = new Vector2[siteCount];
             for (int i = 0; i < siteCount; ++i)
             {
-                sites[i] = new Vector2(
-                    (float)random.NextDouble() * bounds.x,
-                    (float)random.NextDouble() * bounds.y
-                );
+                sites[i] = GetUniformRandomPoint(random, bounds);
             }
             return sites;
         }
 
-        private static Vector2[] GenerateControlPointsMitchell(System.Random random, Vector2 bounds, int siteCount)
+        private static Vector2[] GenerateControlPointsMitchell(System.Random random, Vector2 bounds, int siteCount, int numCandidates)
         {
-            throw new System.NotImplementedException();
+            // TODO: Optimise with a quadtree
+            var sites = new Vector2[siteCount];
+
+            sites[0] = GetUniformRandomPoint(random, bounds);
+
+            for (int siteIndex = 1; siteIndex < siteCount; ++siteIndex)
+            {
+                Vector2 bestCandidate = Vector2.positiveInfinity;
+                float bestDistance = float.MinValue;
+                for (int candidateIndex = 0; candidateIndex < numCandidates; ++candidateIndex)
+                {
+                    Vector2 candidate = GetUniformRandomPoint(random, bounds);
+                    float minDistSq = float.MaxValue;
+                    for (int checkSiteIndex = 0; checkSiteIndex < siteIndex; ++checkSiteIndex)
+                    {
+                        float distSq = (sites[checkSiteIndex] - candidate).SqrMagnitude();
+                        if (distSq < minDistSq)
+                        {
+                            minDistSq = distSq;
+                        }
+                    }
+                    if (minDistSq > bestDistance)
+                    {
+                        bestCandidate = candidate;
+                        bestDistance = minDistSq;
+                    }
+                }
+                sites[siteIndex] = bestCandidate;
+            }
+            return sites;
         }
 
         private static GK.VoronoiDiagram GenerateVoronoi(Vector2[] sites)
@@ -93,10 +159,26 @@ namespace Assets.Generator
             return voronoiDiagram;
         }
 
+        private static void RenderDebugBounds(Vector2 bounds)
+        {
+            var points = new Vector3[]
+            {
+                Vector3.zero,
+                new Vector3(0.0f, 0.0f, bounds.y),
+                new Vector3(bounds.x, 0.0f, bounds.y),
+                new Vector3(bounds.x, 0.0f, 0.0f)
+            };
+            Debug.DrawLine(points[0], points[1], Color.cyan);
+            Debug.DrawLine(points[1], points[2], Color.cyan);
+            Debug.DrawLine(points[2], points[3], Color.cyan);
+            Debug.DrawLine(points[3], points[0], Color.cyan);
+        }
+
         private static void RenderDebugVoronoi(GK.VoronoiDiagram diagram)
         {
             if (diagram != null)
             {
+                // Draw the edges
                 if (diagram.Edges != null)
                 {
                     int edgeCount = diagram.Edges.Count;
