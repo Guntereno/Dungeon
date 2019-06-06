@@ -25,16 +25,32 @@ namespace Assets.Generator
         public int SiteCount = 10;
         public int CandidateCount = 10;
 
-        // Voronoi Generation
+        [Header("Voronoi")]
 
+        public bool m_showVoronoi = true;
         private Vector2[] m_sites;
         private GK.VoronoiDiagram m_voronoiDiagram;
         private Vector2 m_bounds;
 
+        [Header("Noise")]
+
+        public bool m_showNoise = true;
+        public float m_noiseScale = 1.0f;
+        private Noise.OpenSimplex m_openSimplex;
+        private Texture2D m_openSimplexTexture;
+
+        [Header("Scene")]
+
+        [Range(-1.0f, 1.0f)]
+        public float m_siteThreshold = 0.0f;
+
         // Scene Heirarchy Generation
 
-        [HideInInspector]
+        [HideInInspector, SerializeField]
         private Transform m_rootNode;
+
+        [HideInInspector, SerializeField]
+        private GameObject m_openSimplexPreview;
 
         // MonoBehaviour Methods
 
@@ -43,10 +59,15 @@ namespace Assets.Generator
 
         void Update()
         {
-            if(m_voronoiDiagram != null)
+            if(m_showVoronoi && (m_voronoiDiagram != null))
             {
                 RenderDebugBounds(m_bounds);
                 RenderDebugVoronoi(m_voronoiDiagram);
+            }
+
+            if(m_openSimplexPreview != null)
+            {
+                m_openSimplexPreview.SetActive(m_showNoise);
             }
         }
 
@@ -55,6 +76,9 @@ namespace Assets.Generator
         public void Generate()
         {
             var random = new System.Random(Seed);
+
+
+            // - Generate the Voronoi Diagram
 
             switch (DistributionAlgorithm)
             {
@@ -73,9 +97,20 @@ namespace Assets.Generator
             m_voronoiDiagram = GenerateVoronoi(m_sites);
             m_bounds = Bounds;
 
-            GenerateScene(m_voronoiDiagram);
 
-            if(Camera != null)
+            // - Generate the noise function
+
+            // Note: only using seeds in the int range here
+            m_openSimplex = new Noise.OpenSimplex(random.Next());
+            m_openSimplexTexture = GenerateOpenSimplexTexture(m_openSimplex, 512, m_noiseScale);
+
+
+            // - Generate the scene elements
+
+            GenerateScene();
+            GenerateNoisePreview();
+
+            if (Camera != null)
             {
                 // Position camera so it can see the whole width of the shape
                 // HACK
@@ -97,6 +132,77 @@ namespace Assets.Generator
         }
 
         // Private Methods
+
+        private void GenerateScene()
+        {
+            if (m_rootNode != null)
+            {
+                GameObject.DestroyImmediate(m_rootNode.gameObject);
+            }
+            m_rootNode = new GameObject("SceneRoot").transform;
+
+            // Build list of sites to include by sampling the noise function
+            int siteCount = m_voronoiDiagram.Sites.Count;
+            for (int siteIndex = 0; siteIndex < siteCount; ++siteIndex)
+            {
+                Vector2 site = m_voronoiDiagram.Sites[siteIndex];
+                double u = ((double)site.x / m_bounds.x) * m_noiseScale;
+                double v = ((double)site.y / m_bounds.y) * m_noiseScale;
+                double sample = m_openSimplex.Evaluate(u, v);
+
+                if(sample > m_siteThreshold)
+                {
+                    GenerateSite(m_voronoiDiagram, siteIndex, GroundMaterial, m_rootNode);
+                }
+            }
+        }
+
+        private void GenerateNoisePreview()
+        {
+            // Generate noise preview plane
+            {
+                if (m_openSimplexPreview != null)
+                {
+                    GameObject.DestroyImmediate(m_openSimplexPreview);
+                }
+
+                var root = new GameObject("NoisePreview");
+                root.transform.position = new Vector3(0.0f, 0.1f, 0.0f);
+                var meshRenderer = root.AddComponent<MeshRenderer>();
+
+                var tempMaterial = Instantiate(GroundMaterial);
+                tempMaterial.SetTexture("_MainTex", m_openSimplexTexture);
+                meshRenderer.sharedMaterial = tempMaterial;
+
+                var meshFilter = root.AddComponent<MeshFilter>();
+                meshFilter.mesh = GenerateGroundMesh(m_bounds);
+                m_openSimplexPreview = root;
+            }
+        }
+
+        // Private Static Methods
+
+        private static Texture2D GenerateOpenSimplexTexture(Noise.OpenSimplex openSimplex, int dims, double scale)
+        {
+            var result = new Texture2D(dims, dims);
+
+            double mapScale = scale / dims;
+
+            for (int y = 0; y < dims; ++y)
+            {
+                for (int x = 0; x < dims; ++x)
+                {
+                    float val = (float)(openSimplex.Evaluate((mapScale * x), (mapScale * y)));
+                    val = (val * 0.5f) + 0.5f;
+                    Color color = new Color(val, val, val, 1.0f);
+                    result.SetPixel(x, y, color);
+                }
+            }
+
+            result.Apply();
+
+            return result;
+        }
 
         private static Vector2 GetUniformRandomPoint(System.Random random, Vector2 bounds)
         {
@@ -292,36 +398,61 @@ namespace Assets.Generator
             return true;
         }
 
-        private void GenerateScene(GK.VoronoiDiagram diagram)
-        {
-            if (m_rootNode != null)
-            {
-                GameObject.DestroyImmediate(m_rootNode.gameObject);
-            }
-            m_rootNode = new GameObject("GeneratorRoot").transform;
-
-            int siteCount = m_voronoiDiagram.Sites.Count;
-
-            for (int siteIndex = 0; siteIndex < siteCount; ++siteIndex)
-            {
-                GenerateSite(diagram, siteIndex);
-            }
-        }
-
-        private void GenerateSite(GK.VoronoiDiagram diagram, int siteIndex)
+        private static void GenerateSite(GK.VoronoiDiagram diagram, int siteIndex, Material material, Transform parent)
         {
             Mesh mesh = GenerateSiteMesh(diagram, siteIndex);
             if (mesh != null)
             {
                 var siteRoot = new GameObject("Site" + siteIndex);
-                siteRoot.transform.SetParent(m_rootNode, false);
+                siteRoot.transform.SetParent(parent, false);
 
                 var meshRenderer = siteRoot.AddComponent<MeshRenderer>();
-                meshRenderer.material = GroundMaterial;
+                meshRenderer.material = material;
 
                 var meshFilter = siteRoot.AddComponent<MeshFilter>();
                 meshFilter.mesh = GenerateSiteMesh(diagram, siteIndex);
             }
+        }
+
+        private static Mesh GenerateGroundMesh(Vector2 bounds)
+        {
+            var vertices = new Vector3[]
+            {
+                new Vector4 ( 0.0f,     0.0f, 0.0f     ),
+                new Vector4 ( bounds.x, 0.0f, 0.0f     ),
+                new Vector4 ( bounds.x, 0.0f, bounds.y ),
+                new Vector4 ( 0.0f,     0.0f, bounds.y ),
+            };
+
+            var uv = new Vector2[]
+            {
+                new Vector2 ( 0.0f, 0.0f ),
+                new Vector2 ( 1.0f, 0.0f ),
+                new Vector2 ( 1.0f, 1.0f ),
+                new Vector2 ( 0.0f, 1.0f ),
+            };
+
+            var normals = new Vector3[]
+            {
+                new Vector4 ( 0.0f, 1.0f, 0.0f ),
+                new Vector4 ( 0.0f, 1.0f, 0.0f ),
+                new Vector4 ( 0.0f, 1.0f, 0.0f ),
+                new Vector4 ( 0.0f, 1.0f, 0.0f )
+            };
+
+            var triangles = new int[]
+            {
+                0, 3, 2,
+                0, 2, 1
+            };
+
+            var mesh = new Mesh();
+            mesh.vertices = vertices;
+            mesh.uv = uv;
+            mesh.normals = normals;
+            mesh.triangles = triangles;
+
+            return mesh;
         }
 
         private static Mesh GenerateSiteMesh(GK.VoronoiDiagram diagram, int siteIndex)
@@ -375,9 +506,6 @@ namespace Assets.Generator
                         triangles[0 + (segmentIndex * 3)] = 0; // Center point
                         triangles[2 + (segmentIndex * 3)] = segmentIndex + 1; // Segment + center
                         triangles[1 + (segmentIndex * 3)] = nextIndex + 1;
-
-                        // Debug Render
-                        //Debug.DrawLine(loop[segmentIndex], loop[nextIndex], Color.cyan, 4.0f);
                     }
                 }
 
