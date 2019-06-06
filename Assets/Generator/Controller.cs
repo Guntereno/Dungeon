@@ -44,6 +44,9 @@ namespace Assets.Generator
         [Range(-1.0f, 1.0f)]
         public float m_siteThreshold = 0.0f;
 
+        [Range(0.0f, 0.5f)]
+        public float m_fringeAmount = 0.0f;
+
         // Scene Heirarchy Generation
 
         [HideInInspector, SerializeField]
@@ -146,14 +149,27 @@ namespace Assets.Generator
             for (int siteIndex = 0; siteIndex < siteCount; ++siteIndex)
             {
                 Vector2 site = m_voronoiDiagram.Sites[siteIndex];
-                double u = ((double)site.x / m_bounds.x) * m_noiseScale;
-                double v = ((double)site.y / m_bounds.y) * m_noiseScale;
-                double sample = m_openSimplex.Evaluate(u, v);
+                float u = (site.x / m_bounds.x);
+                float v = (site.y / m_bounds.y);
+                double sample = m_openSimplex.Evaluate(u * m_noiseScale, v * m_noiseScale);
 
-                if(sample > m_siteThreshold)
-                {
-                    GenerateSite(m_voronoiDiagram, siteIndex, GroundMaterial, m_rootNode);
-                }
+                // Reject if noise is below the threshold
+                if (sample < m_siteThreshold)
+                    continue;
+
+                // HACK: Reject outside points.
+                // This is due to a suspected bug in the voronoi diagram where points close
+                // to the edge seem to extend too far outwards
+                if (u < m_fringeAmount)
+                    continue;
+                if (v < m_fringeAmount)
+                    continue;
+                if (u > (1.0f - m_fringeAmount))
+                    continue;
+                if (v > (1.0f - m_fringeAmount))
+                    continue;
+
+                GenerateSite(m_voronoiDiagram, siteIndex, GroundMaterial, m_rootNode);
             }
         }
 
